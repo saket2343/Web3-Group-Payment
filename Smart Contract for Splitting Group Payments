@@ -1,0 +1,109 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+contract GroupPayment {
+    struct PaymentGroup {
+        address[] participants;
+        uint256 totalAmount;
+        uint256 amountPaid;
+        bool isCompleted;
+        mapping(address => uint256) participantAmount;
+    }
+
+    mapping(uint256 => PaymentGroup) public paymentGroups;
+    uint256 public groupIdCounter;
+
+    event GroupCreated(uint256 groupId, address[] participants, uint256 totalAmount);
+    event PaymentMade(uint256 groupId, address participant, uint256 amount);
+    event FundsDistributed(uint256 groupId);
+
+    function createGroup(address[] memory _participants, uint256 _totalAmount) public returns (uint256) {
+        require(_participants.length > 0, "At least one participant required.");
+        require(_totalAmount > 0, "Total amount must be greater than 0.");
+        
+        groupIdCounter++;
+        PaymentGroup storage newGroup = paymentGroups[groupIdCounter];
+        newGroup.participants = _participants;
+        newGroup.totalAmount = _totalAmount;
+        newGroup.amountPaid = 0;
+        newGroup.isCompleted = false;
+        
+        emit GroupCreated(groupIdCounter, _participants, _totalAmount);
+        return groupIdCounter;
+    }
+
+    function pay(uint256 _groupId) public payable {
+        PaymentGroup storage group = paymentGroups[_groupId];
+        require(!group.isCompleted, "Payment group is already completed.");
+        require(msg.value > 0, "Amount must be greater than 0.");
+        
+        uint256 individualShare = group.totalAmount / group.participants.length;
+        require(msg.value == individualShare, "You must pay your exact share.");
+        
+        bool isParticipant = false;
+        for (uint i = 0; i < group.participants.length; i++) {
+            if (group.participants[i] == msg.sender) {
+                isParticipant = true;
+                break;
+            }
+        }
+        require(isParticipant, "You are not a participant of this group.");
+        
+        group.participantAmount[msg.sender] += msg.value;
+        group.amountPaid += msg.value;
+        
+        emit PaymentMade(_groupId, msg.sender, msg.value);
+        
+        bool allPaid = true;
+        for (uint i = 0; i < group.participants.length; i++) {
+            if (group.participantAmount[group.participants[i]] < individualShare) {
+                allPaid = false;
+                break;
+            }
+        }
+
+        if (allPaid) {
+            emit FundsDistributed(_groupId);
+        }
+    }
+
+    function distributeFunds(uint256 _groupId) public {
+        PaymentGroup storage group = paymentGroups[_groupId];
+        require(group.amountPaid >= group.totalAmount, "Total amount not yet paid.");
+        require(!group.isCompleted, "Funds already distributed.");
+        
+        uint256 shareAmount = group.totalAmount / group.participants.length;
+        
+        for (uint i = 0; i < group.participants.length; i++) {
+            address participant = group.participants[i];
+            payable(participant).transfer(shareAmount);
+        }
+        
+        group.isCompleted = true;
+        emit FundsDistributed(_groupId);
+    }
+
+    function getUnpaidParticipants(uint256 _groupId) public view returns (address[] memory) {
+        PaymentGroup storage group = paymentGroups[_groupId];
+        uint256 individualShare = group.totalAmount / group.participants.length;
+        uint256 unpaidCount = 0;
+        
+        for (uint i = 0; i < group.participants.length; i++) {
+            if (group.participantAmount[group.participants[i]] < individualShare) {
+                unpaidCount++;
+            }
+        }
+        
+        address[] memory unpaidParticipants = new address[](unpaidCount);
+        uint256 index = 0;
+        for (uint i = 0; i < group.participants.length; i++) {
+            if (group.participantAmount[group.participants[i]] < individualShare) {
+                unpaidParticipants[index] = group.participants[i];
+                index++;
+            }
+        }
+        return unpaidParticipants;
+    }
+
+    receive() external payable {}
+}
